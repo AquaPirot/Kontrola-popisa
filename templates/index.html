@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kontrola Popisa Pića</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f0f2f5; }
+    .card { border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .upload-zone {
+      border: 2px dashed #adb5bd;
+      border-radius: 10px;
+      padding: 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: #0d6efd;
+      background: #e8f0fe;
+    }
+    .upload-zone .icon { font-size: 2.5rem; }
+    .badge-ok       { background:#198754; }
+    .badge-manjak   { background:#dc3545; }
+    .badge-visak    { background:#fd7e14; }
+    .badge-neknjig  { background:#6c757d; }
+    .badge-nodata   { background:#adb5bd; }
+    tr.manjak td    { background:#fff5f5; }
+    tr.visak td     { background:#fff8f0; }
+    tr.nije_u_knjig td { background:#f8f9fa; color:#888; }
+    tr.ok td        { background:#f0fff4; }
+    .summary-box {
+      border-radius: 10px;
+      padding: 16px 24px;
+      color: #fff;
+      font-size: 1.1rem;
+    }
+    #spinner { display:none; }
+    #results-section { display:none; }
+    .filter-btn.active { box-shadow: inset 0 0 0 2px #000; }
+    th { white-space: nowrap; }
+    .preview-img { max-height: 120px; border-radius:8px; }
+    #progress-text { font-size: .95rem; color:#555; }
+  </style>
+</head>
+<body>
+<div class="container py-4">
+  <div class="text-center mb-4">
+    <h2 class="fw-bold">Kontrola Popisa Pića</h2>
+    <p class="text-muted">Upload-ujte ručno pisanu listu i PDF iz knjigovodstva — aplikacija automatski poredi stanja</p>
+  </div>
+
+  <!-- Upload Form -->
+  <div class="card mb-4" id="upload-card">
+    <div class="card-body p-4">
+      <form id="upload-form">
+        <div class="row g-4">
+          <!-- Image Upload -->
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Fizički popis (slika)</label>
+            <div class="upload-zone" id="image-zone" onclick="document.getElementById('image-input').click()">
+              <div class="icon">📷</div>
+              <div id="image-label" class="mt-2 text-muted">Kliknite ili prevucite sliku<br><small>(JPG, PNG)</small></div>
+              <img id="image-preview" class="preview-img mt-2 d-none">
+            </div>
+            <input type="file" id="image-input" name="image" accept="image/*" class="d-none">
+          </div>
+          <!-- PDF Upload -->
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Knjigovodstveno stanje (PDF)</label>
+            <div class="upload-zone" id="pdf-zone" onclick="document.getElementById('pdf-input').click()">
+              <div class="icon">📄</div>
+              <div id="pdf-label" class="mt-2 text-muted">Kliknite ili prevucite PDF<br><small>(iz programa)</small></div>
+            </div>
+            <input type="file" id="pdf-input" name="pdf" accept="application/pdf" class="d-none">
+          </div>
+        </div>
+
+        <div class="text-center mt-4">
+          <button type="submit" class="btn btn-primary btn-lg px-5" id="submit-btn">
+            Analiziraj i Uporedi
+          </button>
+        </div>
+      </form>
+
+      <!-- Spinner -->
+      <div id="spinner" class="text-center mt-3">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p id="progress-text" class="mt-2">Čitam sliku pomoću AI (može trajati 15-30 sekundi)...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="results-section">
+    <!-- Summary Cards -->
+    <div class="row g-3 mb-4" id="summary-row"></div>
+
+    <!-- Filter Buttons -->
+    <div class="mb-3 d-flex gap-2 flex-wrap" id="filter-btns">
+      <button class="btn btn-sm btn-outline-secondary filter-btn active" data-filter="all">Sve</button>
+      <button class="btn btn-sm btn-outline-danger filter-btn" data-filter="manjak">Manjak</button>
+      <button class="btn btn-sm btn-outline-warning filter-btn" data-filter="visak">Višak</button>
+      <button class="btn btn-sm btn-outline-success filter-btn" data-filter="ok">Tačno</button>
+      <button class="btn btn-sm btn-outline-secondary filter-btn" data-filter="nije_u_knjig">Nije u knjig.</button>
+      <button class="btn btn-sm btn-outline-secondary filter-btn" data-filter="nedostaju_podaci">Bez podataka</button>
+      <button class="btn btn-sm btn-outline-dark ms-auto" onclick="exportCSV()">⬇ Export CSV</button>
+    </div>
+
+    <!-- Table -->
+    <div class="card">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" id="results-table">
+            <thead class="table-dark">
+              <tr>
+                <th>#</th>
+                <th>Naziv (slika)</th>
+                <th>JM</th>
+                <th>Fizičko stanje</th>
+                <th>Naziv (knjig.)</th>
+                <th>Knjig. stanje</th>
+                <th>Razlika</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="results-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center mt-3">
+      <button class="btn btn-outline-secondary" onclick="resetForm()">Nova analiza</button>
+    </div>
+  </div>
+
+  <div id="error-alert" class="alert alert-danger mt-3 d-none"></div>
+</div>
+
+<script>
+let allItems = [];
+
+// Drag & drop
+['image-zone', 'pdf-zone'].forEach(zoneId => {
+  const zone = document.getElementById(zoneId);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const inputId = zoneId === 'image-zone' ? 'image-input' : 'pdf-input';
+    const input = document.getElementById(inputId);
+    input.files = e.dataTransfer.files;
+    updateLabel(inputId, e.dataTransfer.files[0]);
+  });
+});
+
+document.getElementById('image-input').addEventListener('change', e => {
+  updateLabel('image-input', e.target.files[0]);
+});
+document.getElementById('pdf-input').addEventListener('change', e => {
+  updateLabel('pdf-input', e.target.files[0]);
+});
+
+function updateLabel(inputId, file) {
+  if (!file) return;
+  if (inputId === 'image-input') {
+    document.getElementById('image-label').textContent = file.name;
+    const preview = document.getElementById('image-preview');
+    preview.src = URL.createObjectURL(file);
+    preview.classList.remove('d-none');
+  } else {
+    document.getElementById('pdf-label').textContent = file.name;
+  }
+}
+
+document.getElementById('upload-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const imageFile = document.getElementById('image-input').files[0];
+  const pdfFile = document.getElementById('pdf-input').files[0];
+
+  if (!imageFile || !pdfFile) {
+    showError('Morate izabrati i sliku i PDF fajl.');
+    return;
+  }
+
+  document.getElementById('error-alert').classList.add('d-none');
+  document.getElementById('spinner').style.display = 'block';
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('results-section').style.display = 'none';
+
+  const formData = new FormData();
+  formData.append('image', imageFile);
+  formData.append('pdf', pdfFile);
+
+  try {
+    const response = await fetch('/api/reconcile', { method: 'POST', body: formData });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Nepoznata greška');
+    }
+
+    renderResults(data);
+  } catch (err) {
+    showError('Greška: ' + err.message);
+  } finally {
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('submit-btn').disabled = false;
+  }
+});
+
+function renderResults(data) {
+  allItems = data.items;
+  const s = data.summary;
+
+  // Summary cards
+  const summaryRow = document.getElementById('summary-row');
+  summaryRow.innerHTML = `
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#0d6efd">
+        <div class="fs-3 fw-bold">${s.ukupno}</div>
+        <div>Ukupno</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#dc3545">
+        <div class="fs-3 fw-bold">${s.manjak}</div>
+        <div>Manjak</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#fd7e14">
+        <div class="fs-3 fw-bold">${s.visak}</div>
+        <div>Višak</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#198754">
+        <div class="fs-3 fw-bold">${s.ok}</div>
+        <div>Tačno</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#6c757d">
+        <div class="fs-3 fw-bold">${s.nije_u_knjig}</div>
+        <div>Nije u knjig.</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="summary-box" style="background:#adb5bd">
+        <div class="fs-3 fw-bold">${s.nedostaju_podaci}</div>
+        <div>Bez podataka</div>
+      </div>
+    </div>
+  `;
+
+  renderTable(allItems);
+  document.getElementById('results-section').style.display = 'block';
+  document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderTable(items) {
+  const tbody = document.getElementById('results-tbody');
+  tbody.innerHTML = '';
+
+  items.forEach((item, i) => {
+    const tr = document.createElement('tr');
+    tr.className = item.status;
+    tr.dataset.status = item.status;
+
+    const statusBadge = {
+      ok: '<span class="badge bg-success">Tačno</span>',
+      manjak: '<span class="badge bg-danger">Manjak</span>',
+      visak: '<span class="badge bg-warning text-dark">Višak</span>',
+      nije_u_knjig: '<span class="badge bg-secondary">Nije u knjig.</span>',
+      nedostaju_podaci: '<span class="badge bg-light text-dark border">Bez pod.</span>',
+    }[item.status] || '';
+
+    const fizicko = item.fizicko_stanje !== null && item.fizicko_stanje !== undefined
+      ? item.fizicko_stanje : '<span class="text-muted">-</span>';
+    const knjig = item.knjig_stanje !== null && item.knjig_stanje !== undefined
+      ? item.knjig_stanje : '<span class="text-muted">-</span>';
+    const razlika = item.razlika !== null && item.razlika !== undefined
+      ? `<strong class="${item.razlika < 0 ? 'text-danger' : item.razlika > 0 ? 'text-warning' : 'text-success'}">${item.razlika > 0 ? '+' : ''}${item.razlika}</strong>`
+      : '<span class="text-muted">-</span>';
+
+    tr.innerHTML = `
+      <td class="text-muted small">${i + 1}</td>
+      <td><strong>${escHtml(item.naziv)}</strong></td>
+      <td><small class="text-muted">${escHtml(item.jed_mere || '')}</small></td>
+      <td>${fizicko}</td>
+      <td><small class="text-muted">${item.naziv_knjig ? escHtml(item.naziv_knjig) : '<em>-</em>'}</small></td>
+      <td>${knjig}</td>
+      <td>${razlika}</td>
+      <td>${statusBadge}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Filter buttons
+document.getElementById('filter-btns').addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn');
+  if (!btn) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const filter = btn.dataset.filter;
+  const filtered = filter === 'all' ? allItems : allItems.filter(i => i.status === filter);
+  renderTable(filtered);
+});
+
+function exportCSV() {
+  const headers = ['Naziv (slika)', 'JM', 'Fizičko stanje', 'Naziv (knjig)', 'Knjig. stanje', 'Razlika', 'Status'];
+  const rows = allItems.map(i => [
+    i.naziv, i.jed_mere || '', i.fizicko_stanje ?? '', i.naziv_knjig || '',
+    i.knjig_stanje ?? '', i.razlika ?? '', i.status
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'kontrola_popisa.csv';
+  a.click();
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-alert');
+  el.textContent = msg;
+  el.classList.remove('d-none');
+}
+
+function resetForm() {
+  document.getElementById('upload-form').reset();
+  document.getElementById('image-label').textContent = 'Kliknite ili prevucite sliku\n(JPG, PNG)';
+  document.getElementById('pdf-label').textContent = 'Kliknite ili prevucite PDF\n(iz programa)';
+  document.getElementById('image-preview').classList.add('d-none');
+  document.getElementById('results-section').style.display = 'none';
+  document.getElementById('upload-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
