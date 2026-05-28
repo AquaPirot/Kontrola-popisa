@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kontrola Popisa Pića</title>
+  <link rel="manifest" href="static/manifest.json">
+  <link rel="icon" href="static/favicon.ico">
+  <meta name="theme-color" content="#0d6efd">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Kontrola Popisa">
+  <link rel="apple-touch-icon" href="static/icon-192.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#f0f2f5; }
+    .card { border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,.08); }
+    .upload-zone {
+      border:2px dashed #adb5bd; border-radius:10px; padding:28px;
+      text-align:center; cursor:pointer; transition:border-color .2s,background .2s;
+    }
+    .upload-zone:hover,.upload-zone.drag-over { border-color:#0d6efd; background:#e8f0fe; }
+    .upload-zone .icon { font-size:2.5rem; }
+    tr.manjak td { background:#fff5f5; }
+    tr.visak td { background:#fff8f0; }
+    tr.nije_u_knjig td { background:#f8f9fa; color:#888; }
+    tr.ok td { background:#f0fff4; }
+    .summary-box { border-radius:10px; padding:16px 24px; color:#fff; font-size:1.1rem; }
+    #spinner { display:none; }
+    #results-section { display:none; }
+    .preview-img { max-height:120px; border-radius:8px; }
+    #api-key-bar { background:#fff3cd; border-bottom:1px solid #ffc107; }
+  </style>
+</head>
+<body>
+
+<!-- API Key Bar -->
+<div id="api-key-bar" class="px-3 py-2 d-flex align-items-center gap-2" style="display:none!important" id="api-bar">
+  <span class="fw-semibold small">🔑 Anthropic API ključ:</span>
+  <input type="password" id="api-key-input" class="form-control form-control-sm" style="max-width:340px" placeholder="sk-ant-...">
+  <button class="btn btn-warning btn-sm" onclick="saveKey()">Sačuvaj</button>
+  <span id="key-status" class="small text-muted ms-2"></span>
+</div>
+
+<div class="container py-4">
+  <div class="text-center mb-4">
+    <h2 class="fw-bold">Kontrola Popisa Pića</h2>
+    <p class="text-muted">Upload-ujte ručno pisanu listu i PDF iz knjigovodstva</p>
+    <button id="install-btn" class="btn btn-success btn-sm me-2" style="display:none" onclick="installApp()">⬇ Instaliraj na telefon</button>
+    <button class="btn btn-outline-secondary btn-sm" onclick="toggleKeyBar()">⚙ API ključ</button>
+  </div>
+
+  <!-- Upload Form -->
+  <div class="card mb-4" id="upload-card">
+    <div class="card-body p-4">
+      <form id="upload-form">
+        <div class="row g-4">
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Fizički popis (slika)</label>
+            <div class="upload-zone" id="image-zone" onclick="document.getElementById('image-input').click()">
+              <div class="icon">📷</div>
+              <div id="image-label" class="mt-2 text-muted">Kliknite ili prevucite sliku<br><small>(JPG, PNG)</small></div>
+              <img id="image-preview" class="preview-img mt-2 d-none">
+            </div>
+            <input type="file" id="image-input" accept="image/*" class="d-none">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Knjigovodstveno stanje (PDF)</label>
+            <div class="upload-zone" id="pdf-zone" onclick="document.getElementById('pdf-input').click()">
+              <div class="icon">📄</div>
+              <div id="pdf-label" class="mt-2 text-muted">Kliknite ili prevucite PDF<br><small>(iz programa)</small></div>
+            </div>
+            <input type="file" id="pdf-input" accept="application/pdf" class="d-none">
+          </div>
+        </div>
+        <div class="text-center mt-4">
+          <button type="submit" class="btn btn-primary btn-lg px-5" id="submit-btn">Analiziraj i Uporedi</button>
+        </div>
+      </form>
+      <div id="spinner" class="text-center mt-3">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p id="progress-text" class="mt-2 text-muted">Čitam sliku pomoću AI (15-30 sekundi)...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="results-section">
+    <div class="row g-3 mb-4" id="summary-row"></div>
+    <div class="mb-3 d-flex gap-2 flex-wrap" id="filter-btns">
+      <button class="btn btn-sm btn-outline-secondary filter-btn active" data-filter="all">Sve</button>
+      <button class="btn btn-sm btn-outline-danger filter-btn" data-filter="manjak">Manjak</button>
+      <button class="btn btn-sm btn-outline-warning filter-btn" data-filter="visak">Višak</button>
+      <button class="btn btn-sm btn-outline-success filter-btn" data-filter="ok">Tačno</button>
+      <button class="btn btn-sm btn-outline-secondary filter-btn" data-filter="nije_u_knjig">Nije u knjig.</button>
+      <button class="btn btn-sm btn-outline-dark ms-auto" onclick="exportCSV()">⬇ CSV</button>
+    </div>
+    <div class="card">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" id="results-table">
+            <thead class="table-dark">
+              <tr>
+                <th>#</th><th>Naziv (slika)</th><th>JM</th>
+                <th>Fizičko</th><th>Naziv (knjig.)</th><th>Knjig.</th>
+                <th>Razlika</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="results-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="text-center mt-3">
+      <button class="btn btn-outline-secondary" onclick="resetForm()">Nova analiza</button>
+    </div>
+  </div>
+
+  <div id="error-alert" class="alert alert-danger mt-3 d-none"></div>
+</div>
+
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let allItems = [];
+
+// ── API Key ──────────────────────────────────────────────
+function getKey() { return localStorage.getItem('anthropic_key') || ''; }
+function saveKey() {
+  const v = document.getElementById('api-key-input').value.trim();
+  if (!v) return;
+  localStorage.setItem('anthropic_key', v);
+  document.getElementById('key-status').textContent = '✓ Sačuvano';
+  setTimeout(() => document.getElementById('key-status').textContent = '', 2000);
+}
+function toggleKeyBar() {
+  const bar = document.getElementById('api-key-bar');
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+  document.getElementById('api-key-input').value = getKey();
+}
+window.addEventListener('load', () => {
+  if (!getKey()) {
+    document.getElementById('api-key-bar').style.display = 'flex';
+    document.getElementById('api-key-input').value = '';
+  }
+});
+
+// ── File inputs ───────────────────────────────────────────
+['image-zone','pdf-zone'].forEach(zoneId => {
+  const zone = document.getElementById(zoneId);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const inp = document.getElementById(zoneId === 'image-zone' ? 'image-input' : 'pdf-input');
+    inp.files = e.dataTransfer.files;
+    inp.dispatchEvent(new Event('change'));
+  });
+});
+document.getElementById('image-input').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  document.getElementById('image-label').textContent = f.name;
+  const prev = document.getElementById('image-preview');
+  prev.src = URL.createObjectURL(f); prev.classList.remove('d-none');
+});
+document.getElementById('pdf-input').addEventListener('change', e => {
+  const f = e.target.files[0]; if (f) document.getElementById('pdf-label').textContent = f.name;
+});
+
+// ── PDF Parser ────────────────────────────────────────────
+async function parsePDF(file) {
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  const UNITS = /^(kom|lit|kg|gr)$/i;
+  const items = [], seen = new Set();
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+
+    // Reconstruct lines by grouping items with similar Y coordinate
+    const byY = {};
+    for (const item of tc.items) {
+      const y = Math.round(item.transform[5]);
+      if (!byY[y]) byY[y] = [];
+      byY[y].push(item.str);
+    }
+    const lines = Object.keys(byY)
+      .sort((a, b) => b - a)
+      .map(y => byY[y].join(' ').replace(/\s+/g, ' ').trim());
+
+    for (const line of lines) {
+      if (!line || /^aqua/i.test(line) || /^naziv/i.test(line)) continue;
+      if (/^\d[\d,\.\s]+$/.test(line)) continue;
+
+      // Find last occurrence of <number> <unit> — greedy via split+search
+      const tokens = line.split(/\s+/);
+      let unitIdx = -1;
+      for (let i = tokens.length - 1; i >= 1; i--) {
+        if (UNITS.test(tokens[i])) { unitIdx = i; break; }
+      }
+      if (unitIdx < 1) continue;
+
+      const numStr = tokens[unitIdx - 1];
+      if (!/^-?\d+([,\.]\d+)?$/.test(numStr)) continue;
+
+      const naziv = tokens.slice(0, unitIdx - 1).join(' ').trim();
+      if (!naziv) continue;
+      const key = naziv.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const stanje = parseFloat(numStr.replace(',', '.'));
+      const jm = tokens[unitIdx].toLowerCase();
+      items.push({ naziv, jm, stanje });
+    }
+  }
+  return items;
+}
+
+// ── Anthropic Vision API ──────────────────────────────────
+async function parseImage(file, apiKey) {
+  const b64 = await new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.readAsDataURL(file);
+  });
+  const mt = file.type || 'image/jpeg';
+
+  const prompt = `Ovo je ručno pisana lista zaliha pića u magacinu.
+Tabela ima kolone: Naziv jela i pića | Jed. mere | Preneta količina | Stigla u smeni | Zalihe na kraju dana.
+Izvuci SVE stavke. Za svaku vrati:
+- "naziv": naziv artikla
+- "jed_mere": jedinica mere (kom, ml, gr, br...)
+- "zalihe_kraj": broj iz kolone "Zalihe na kraju dana" (null ako prazno)
+Vrati SAMO JSON niz, bez ikakvog drugog teksta.
+Primer: [{"naziv":"Espreso","jed_mere":"kom","zalihe_kraj":23}]`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mt, data: b64 } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    })
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error?.message || `API greška ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const text = data.content[0].text.trim();
+  const m = text.match(/\[[\s\S]*\]/);
+  return JSON.parse(m ? m[0] : text);
+}
+
+// ── Reconcile ─────────────────────────────────────────────
+function normalizeName(n) {
+  return (n || '').toLowerCase().trim()
+    .replace(/[čć]/g,'c').replace(/š/g,'s').replace(/ž/g,'z')
+    .replace(/đ/g,'d').replace(/\s+/g,' ');
+}
+
+function findMatch(naziv, pdfItems) {
+  const norm = normalizeName(naziv);
+  let best = null, bestScore = 0;
+  for (const item of pdfItems) {
+    const in2 = normalizeName(item.naziv);
+    if (norm === in2) return item;
+    const wa = new Set(norm.split(' ')), wb = new Set(in2.split(' '));
+    const common = [...wa].filter(w => wb.has(w)).length;
+    const score = common / Math.max(wa.size, wb.size);
+    if (score > bestScore && score >= 0.5) { bestScore = score; best = item; }
+  }
+  return best;
+}
+
+function reconcile(imgItems, pdfItems) {
+  const results = [];
+  for (const img of imgItems) {
+    const naziv = (img.naziv || '').trim();
+    if (!naziv) continue;
+    const zalihe = img.zalihe_kraj;
+    const jm_img = (img.jed_mere || '').toLowerCase();
+    const match = findMatch(naziv, pdfItems);
+
+    let status, stanje_knjig = null, razlika = null;
+    if (!match) {
+      status = 'nije_u_knjig';
+    } else {
+      stanje_knjig = match.stanje;
+      if (zalihe == null || stanje_knjig == null) {
+        status = 'nedostaju_podaci';
+      } else {
+        let fiz = parseFloat(zalihe);
+        const knjig = parseFloat(stanje_knjig);
+        const jm_pdf = (match.jm || '').toLowerCase();
+        if (jm_img === 'ml' && jm_pdf === 'lit') fiz /= 1000;
+        else if (jm_img === 'lit' && jm_pdf === 'ml') fiz *= 1000;
+        razlika = Math.round((fiz - knjig) * 1000) / 1000;
+        status = Math.abs(razlika) <= 0.05 ? 'ok' : razlika > 0 ? 'visak' : 'manjak';
+      }
+    }
+    results.push({ naziv, jed_mere: jm_img, fizicko_stanje: zalihe,
+      knjig_stanje: stanje_knjig, razlika, naziv_knjig: match?.naziv || null, status });
+  }
+  const ord = { manjak:0, visak:1, nije_u_knjig:2, nedostaju_podaci:3, ok:4 };
+  results.sort((a,b) => (ord[a.status]??5) - (ord[b.status]??5) || a.naziv.localeCompare(b.naziv));
+  return results;
+}
+
+// ── Form Submit ───────────────────────────────────────────
+document.getElementById('upload-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const apiKey = getKey();
+  if (!apiKey) {
+    showError('Unesite Anthropic API ključ (dugme ⚙ API ključ gore).');
+    document.getElementById('api-key-bar').style.display = 'flex';
+    return;
+  }
+  const imgFile = document.getElementById('image-input').files[0];
+  const pdfFile = document.getElementById('pdf-input').files[0];
+  if (!imgFile || !pdfFile) { showError('Izaberite i sliku i PDF.'); return; }
+
+  document.getElementById('error-alert').classList.add('d-none');
+  document.getElementById('spinner').style.display = 'block';
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('results-section').style.display = 'none';
+
+  try {
+    document.getElementById('progress-text').textContent = 'Čitam PDF...';
+    const pdfItems = await parsePDF(pdfFile);
+
+    document.getElementById('progress-text').textContent = 'AI čita ručno pisanu sliku (15-30s)...';
+    const imgItems = await parseImage(imgFile, apiKey);
+
+    const results = reconcile(imgItems, pdfItems);
+    renderResults(results);
+  } catch(err) {
+    showError('Greška: ' + err.message);
+  } finally {
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('submit-btn').disabled = false;
+  }
+});
+
+// ── Render ────────────────────────────────────────────────
+function renderResults(items) {
+  allItems = items;
+  const s = { ukupno:items.length, ok:0, manjak:0, visak:0, nije_u_knjig:0, nedostaju_podaci:0 };
+  items.forEach(i => s[i.status] = (s[i.status]||0) + 1);
+
+  document.getElementById('summary-row').innerHTML = `
+    ${card('#0d6efd', s.ukupno, 'Ukupno')}
+    ${card('#dc3545', s.manjak, 'Manjak')}
+    ${card('#fd7e14', s.visak, 'Višak')}
+    ${card('#198754', s.ok, 'Tačno')}
+    ${card('#6c757d', s.nije_u_knjig, 'Nije u knjig.')}
+    ${card('#adb5bd', s.nedostaju_podaci, 'Bez pod.')}
+  `;
+  renderTable(items);
+  document.getElementById('results-section').style.display = 'block';
+  document.getElementById('results-section').scrollIntoView({ behavior:'smooth' });
+}
+
+function card(bg, n, label) {
+  return `<div class="col-6 col-md-2">
+    <div class="summary-box" style="background:${bg}">
+      <div class="fs-3 fw-bold">${n}</div><div>${label}</div>
+    </div></div>`;
+}
+
+function renderTable(items) {
+  const tbody = document.getElementById('results-tbody');
+  tbody.innerHTML = '';
+  items.forEach((item, i) => {
+    const tr = document.createElement('tr');
+    tr.className = item.status; tr.dataset.status = item.status;
+    const badge = { ok:'<span class="badge bg-success">Tačno</span>',
+      manjak:'<span class="badge bg-danger">Manjak</span>',
+      visak:'<span class="badge bg-warning text-dark">Višak</span>',
+      nije_u_knjig:'<span class="badge bg-secondary">Nije u knjig.</span>',
+      nedostaju_podaci:'<span class="badge bg-light text-dark border">Bez pod.</span>'
+    }[item.status] || '';
+    const fiz = item.fizicko_stanje != null ? item.fizicko_stanje : '<span class="text-muted">-</span>';
+    const knjig = item.knjig_stanje != null ? item.knjig_stanje : '<span class="text-muted">-</span>';
+    const raz = item.razlika != null
+      ? `<strong class="${item.razlika<0?'text-danger':item.razlika>0?'text-warning':'text-success'}">${item.razlika>0?'+':''}${item.razlika}</strong>`
+      : '<span class="text-muted">-</span>';
+    tr.innerHTML = `<td class="text-muted small">${i+1}</td>
+      <td><strong>${esc(item.naziv)}</strong></td>
+      <td><small class="text-muted">${esc(item.jed_mere||'')}</small></td>
+      <td>${fiz}</td>
+      <td><small class="text-muted">${item.naziv_knjig ? esc(item.naziv_knjig) : '<em>-</em>'}</small></td>
+      <td>${knjig}</td><td>${raz}</td><td>${badge}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('filter-btns').addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn'); if (!btn) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const f = btn.dataset.filter;
+  renderTable(f === 'all' ? allItems : allItems.filter(i => i.status === f));
+});
+
+function exportCSV() {
+  const h = ['Naziv (slika)','JM','Fizičko','Naziv (knjig)','Knjig.','Razlika','Status'];
+  const rows = allItems.map(i => [i.naziv,i.jed_mere||'',i.fizicko_stanje??'',
+    i.naziv_knjig||'',i.knjig_stanje??'',i.razlika??'',i.status]);
+  const csv = [h,...rows].map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'}));
+  a.download = 'kontrola_popisa.csv'; a.click();
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-alert');
+  el.textContent = msg; el.classList.remove('d-none');
+}
+function resetForm() {
+  document.getElementById('upload-form').reset();
+  document.getElementById('image-preview').classList.add('d-none');
+  document.getElementById('image-label').innerHTML = 'Kliknite ili prevucite sliku<br><small>(JPG, PNG)</small>';
+  document.getElementById('pdf-label').innerHTML = 'Kliknite ili prevucite PDF<br><small>(iz programa)</small>';
+  document.getElementById('results-section').style.display = 'none';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── PWA ───────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('static/sw.js');
+}
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  document.getElementById('install-btn').style.display = 'inline-flex';
+});
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-btn').style.display = 'none';
+  deferredPrompt = null;
+});
+function installApp() {
+  if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(()=>deferredPrompt=null); }
+}
+</script>
+</body>
+</html>
