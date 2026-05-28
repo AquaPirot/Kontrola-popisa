@@ -120,6 +120,48 @@
 
 <!-- PDF.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Anthropic SDK (rešava CORS za direktne browser pozive) -->
+<script type="importmap">
+{"imports": {"@anthropic-ai/sdk": "https://esm.sh/@anthropic-ai/sdk@0.40.0"}}
+</script>
+<script type="module">
+import Anthropic from '@anthropic-ai/sdk';
+window._anthropicParseImage = async function(file, apiKey) {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+
+  const b64 = await new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.readAsDataURL(file);
+  });
+  const mt = file.type || 'image/jpeg';
+
+  const prompt = `Ovo je ručno pisana lista zaliha pića u magacinu.
+Tabela ima kolone: Naziv jela i pića | Jed. mere | Preneta količina | Stigla u smeni | Zalihe na kraju dana.
+Izvuci SVE stavke. Za svaku vrati:
+- "naziv": naziv artikla
+- "jed_mere": jedinica mere (kom, ml, gr, br...)
+- "zalihe_kraj": broj iz kolone "Zalihe na kraju dana" (null ako prazno)
+Vrati SAMO JSON niz, bez ikakvog drugog teksta.
+Primer: [{"naziv":"Espreso","jed_mere":"kom","zalihe_kraj":23}]`;
+
+  const msg = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 4096,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mt, data: b64 } },
+        { type: 'text', text: prompt }
+      ]
+    }]
+  });
+
+  const text = msg.content[0].text.trim();
+  const m = text.match(/\[[\s\S]*\]/);
+  return JSON.parse(m ? m[0] : text);
+};
+</script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -131,9 +173,18 @@ function getKey() { return localStorage.getItem('anthropic_key') || ''; }
 function saveKey() {
   const v = document.getElementById('api-key-input').value.trim();
   if (!v) return;
+  if (!v.startsWith('sk-ant-')) {
+    document.getElementById('key-status').textContent = '✗ Ključ mora počinjati sa sk-ant-';
+    document.getElementById('key-status').style.color = '#dc3545';
+    return;
+  }
   localStorage.setItem('anthropic_key', v);
   document.getElementById('key-status').textContent = '✓ Sačuvano';
-  setTimeout(() => document.getElementById('key-status').textContent = '', 2000);
+  document.getElementById('key-status').style.color = '#198754';
+  setTimeout(() => {
+    document.getElementById('key-status').textContent = '';
+    document.getElementById('api-key-bar').style.display = 'none';
+  }, 1500);
 }
 function toggleKeyBar() {
   const bar = document.getElementById('api-key-bar');
@@ -220,54 +271,17 @@ async function parsePDF(file) {
   return items;
 }
 
-// ── Anthropic Vision API ──────────────────────────────────
+// ── Anthropic Vision API (delegirano SDK modulu) ─────────
 async function parseImage(file, apiKey) {
-  const b64 = await new Promise(res => {
-    const r = new FileReader();
-    r.onload = () => res(r.result.split(',')[1]);
-    r.readAsDataURL(file);
-  });
-  const mt = file.type || 'image/jpeg';
-
-  const prompt = `Ovo je ručno pisana lista zaliha pića u magacinu.
-Tabela ima kolone: Naziv jela i pića | Jed. mere | Preneta količina | Stigla u smeni | Zalihe na kraju dana.
-Izvuci SVE stavke. Za svaku vrati:
-- "naziv": naziv artikla
-- "jed_mere": jedinica mere (kom, ml, gr, br...)
-- "zalihe_kraj": broj iz kolone "Zalihe na kraju dana" (null ako prazno)
-Vrati SAMO JSON niz, bez ikakvog drugog teksta.
-Primer: [{"naziv":"Espreso","jed_mere":"kom","zalihe_kraj":23}]`;
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mt, data: b64 } },
-          { type: 'text', text: prompt }
-        ]
-      }]
-    })
-  });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API greška ${resp.status}`);
+  // Čekamo da se SDK modul učita (importmap/esm.sh može biti spor prvi put)
+  for (let i = 0; i < 20; i++) {
+    if (window._anthropicParseImage) break;
+    await new Promise(r => setTimeout(r, 300));
   }
-
-  const data = await resp.json();
-  const text = data.content[0].text.trim();
-  const m = text.match(/\[[\s\S]*\]/);
-  return JSON.parse(m ? m[0] : text);
+  if (!window._anthropicParseImage) {
+    throw new Error('SDK se nije učitao. Proverite internet konekciju i osvežite stranicu.');
+  }
+  return window._anthropicParseImage(file, apiKey);
 }
 
 // ── Reconcile ─────────────────────────────────────────────
@@ -329,8 +343,9 @@ function reconcile(imgItems, pdfItems) {
 document.getElementById('upload-form').addEventListener('submit', async e => {
   e.preventDefault();
   const apiKey = getKey();
-  if (!apiKey) {
-    showError('Unesite Anthropic API ključ (dugme ⚙ API ključ gore).');
+
+  if (!apiKey || !apiKey.startsWith('sk-ant-')) {
+    showError('API ključ nije unet ili nije ispravan. Kliknite ⚙ API ključ i unesite ključ koji počinje sa "sk-ant-".');
     document.getElementById('api-key-bar').style.display = 'flex';
     return;
   }
@@ -353,7 +368,13 @@ document.getElementById('upload-form').addEventListener('submit', async e => {
     const results = reconcile(imgItems, pdfItems);
     renderResults(results);
   } catch(err) {
-    showError('Greška: ' + err.message);
+    let msg = err.message || String(err);
+    if (msg.includes('401') || msg.toLowerCase().includes('auth') || msg.toLowerCase().includes('api key')) {
+      msg = 'API ključ nije ispravan. Proverite ključ na console.anthropic.com i unesite ga ponovo.';
+    } else if (msg.toLowerCase().includes('credit') || msg.includes('402')) {
+      msg = 'Nema kredita na Anthropic nalogu. Dopunite na console.anthropic.com → Billing.';
+    }
+    showError('Greška: ' + msg);
   } finally {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('submit-btn').disabled = false;
