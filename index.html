@@ -79,9 +79,16 @@
       </button>
     </div>
 
+    <div class="alert alert-info py-2 px-3 mb-2" style="font-size:.85rem">
+      💡 Sve vrednosti su popunjene iz PDF-a. <strong>Menjaj samo ono što se razlikuje.</strong>
+    </div>
+
     <!-- Search -->
     <div class="search-box">
-      <input type="search" id="search-input" class="form-control" placeholder="🔍 Pretraži artikal...">
+      <div class="d-flex gap-2">
+        <input type="search" id="search-input" class="form-control" placeholder="🔍 Pretraži artikal...">
+        <button class="btn btn-outline-secondary btn-sm" onclick="showOnlyChanged()" id="changed-btn" title="Prikaži samo promenjeno">✏️</button>
+      </div>
     </div>
 
     <div class="card mt-2">
@@ -123,7 +130,6 @@
       <button class="btn btn-sm btn-outline-danger  filter-btn" data-filter="manjak">Manjak</button>
       <button class="btn btn-sm btn-outline-warning filter-btn" data-filter="visak">Višak</button>
       <button class="btn btn-sm btn-outline-success filter-btn" data-filter="ok">Tačno</button>
-      <button class="btn btn-sm btn-outline-secondary filter-btn" data-filter="neuneto">Neuneto</button>
     </div>
 
     <div class="card">
@@ -263,6 +269,8 @@ function renderEntryTable(items) {
     tr.className = 'item-row';
     tr.dataset.idx = i;
     tr.dataset.naziv = item.naziv.toLowerCase();
+    tr.dataset.knjig = item.stanje ?? '';
+    const val = item.stanje ?? '';
     tr.innerHTML = `
       <td>
         <div class="fw-semibold" style="font-size:.9rem">${esc(item.naziv)}</div>
@@ -271,27 +279,50 @@ function renderEntryTable(items) {
       <td class="text-center knjig-val">${item.stanje ?? '-'}</td>
       <td class="text-center">
         <input type="number" step="any" class="qty-input" data-idx="${i}"
-               placeholder="?" inputmode="decimal">
+               value="${val}" inputmode="decimal">
       </td>`;
     tbody.appendChild(tr);
   });
 
-  // Mark changed inputs
+  // Označi promenjene — i osveži broja promenjenih
   tbody.addEventListener('input', e => {
-    if (e.target.classList.contains('qty-input')) {
-      e.target.classList.toggle('changed', e.target.value !== '');
-    }
+    if (!e.target.classList.contains('qty-input')) return;
+    const tr = e.target.closest('tr');
+    const knjig = tr.dataset.knjig;
+    const changed = e.target.value.trim() !== String(knjig);
+    e.target.classList.toggle('changed', changed);
+    tr.classList.toggle('table-warning', changed);
+    updateChangedCount();
   });
 
-  // Enter key → next field
+  // Enter → sledeći input
   tbody.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.classList.contains('qty-input')) {
       e.preventDefault();
-      const inputs = [...document.querySelectorAll('.qty-input:not([style*="display:none"])')];
-      const idx = inputs.indexOf(e.target);
-      if (idx < inputs.length-1) inputs[idx+1].focus();
+      const all = [...document.querySelectorAll('.qty-input')].filter(el => el.closest('tr').style.display !== 'none');
+      const idx = all.indexOf(e.target);
+      if (idx < all.length-1) all[idx+1].focus();
     }
   });
+}
+
+let showingChanged = false;
+function showOnlyChanged() {
+  showingChanged = !showingChanged;
+  document.getElementById('changed-btn').classList.toggle('btn-warning', showingChanged);
+  document.getElementById('changed-btn').classList.toggle('btn-outline-secondary', !showingChanged);
+  document.querySelectorAll('#entry-tbody tr').forEach(tr => {
+    const isChanged = tr.querySelector('.qty-input.changed') !== null;
+    if (showingChanged) tr.style.display = isChanged ? '' : 'none';
+    else tr.style.display = '';
+  });
+}
+
+function updateChangedCount() {
+  const n = document.querySelectorAll('.qty-input.changed').length;
+  const btn = document.getElementById('changed-btn');
+  btn.textContent = n > 0 ? `✏️ ${n}` : '✏️';
+  btn.title = n > 0 ? `Prikaži samo promenjenih (${n})` : 'Prikaži samo promenjeno';
 }
 
 // ── Step 3: results ───────────────────────────────────────
@@ -300,29 +331,31 @@ function showResults() {
   allResults = pdfItems.map((item, i) => {
     const inp = inputs[i];
     const raw = inp ? inp.value.trim() : '';
-    const fizicko = raw === '' ? null : parseFloat(raw.replace(',','.'));
+    // Ako input nije promenjen (vrednost == knjig) → tretiraj kao tačno
+    const fizicko = raw === '' ? item.stanje : parseFloat(raw.replace(',','.'));
+    const knjig = item.stanje;
     let status, razlika = null;
-    if (fizicko === null) {
-      status = 'neuneto';
+    if (fizicko == null || knjig == null) {
+      // Oba null znači artikal sa 0 u knjig — ako nije menjan, tačno
+      razlika = 0; status = 'ok';
     } else {
-      razlika = Math.round((fizicko - item.stanje) * 1000) / 1000;
+      razlika = Math.round((fizicko - knjig) * 1000) / 1000;
       status = Math.abs(razlika) <= 0.05 ? 'ok' : razlika > 0 ? 'visak' : 'manjak';
     }
-    return { naziv: item.naziv, jm: item.jm, knjig: item.stanje, fizicko, razlika, status };
+    return { naziv: item.naziv, jm: item.jm, knjig, fizicko, razlika, status };
   });
 
-  const ord = { manjak:0, visak:1, neuneto:2, ok:3 };
-  allResults.sort((a,b) => (ord[a.status]??4)-(ord[b.status]??4) || a.naziv.localeCompare(b.naziv));
+  const ord = { manjak:0, visak:1, ok:2 };
+  allResults.sort((a,b) => (ord[a.status]??3)-(ord[b.status]??3) || a.naziv.localeCompare(b.naziv));
 
-  const s = { ukupno: allResults.length, ok:0, manjak:0, visak:0, neuneto:0 };
+  const s = { ukupno: allResults.length, ok:0, manjak:0, visak:0 };
   allResults.forEach(r => s[r.status] = (s[r.status]||0)+1);
 
   document.getElementById('summary-row').innerHTML = `
-    ${card('#dc3545', s.manjak,  'Manjak')}
-    ${card('#fd7e14', s.visak,   'Višak')}
-    ${card('#198754', s.ok,      'Tačno')}
-    ${card('#6c757d', s.neuneto, 'Neuneto')}
-    ${card('#0d6efd', s.ukupno,  'Ukupno')}
+    ${card('#dc3545', s.manjak, 'Manjak')}
+    ${card('#fd7e14', s.visak,  'Višak')}
+    ${card('#198754', s.ok,     'Tačno')}
+    ${card('#0d6efd', s.ukupno, 'Ukupno')}
   `;
   renderResultsTable(allResults);
   document.getElementById('step2').classList.remove('active');
