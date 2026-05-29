@@ -251,7 +251,11 @@ function showStep2(filename) {
     now.toLocaleDateString('sr-RS', {day:'2-digit',month:'2-digit',year:'numeric'}) +
     ' — ' + filename;
 
-  renderEntryTable(pdfItems);
+  // Sakrij artikle sa stanjem 0 — nema ih na lageru
+  const aktivni = pdfItems.filter(item => item.stanje !== 0);
+  document.getElementById('step2-title').textContent =
+    `Unesi stvarno stanje (${aktivni.length} artikala)`;
+  renderEntryTable(aktivni);
 
   document.getElementById('search-input').addEventListener('input', e => {
     const q = norm(e.target.value);
