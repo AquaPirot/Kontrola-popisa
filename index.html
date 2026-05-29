@@ -254,9 +254,17 @@ function showStep2(filename) {
   renderEntryTable(pdfItems);
 
   document.getElementById('search-input').addEventListener('input', e => {
-    const q = e.target.value.toLowerCase();
+    const q = norm(e.target.value);
+    if (!q) {
+      document.querySelectorAll('#entry-tbody tr').forEach(tr => tr.style.display = '');
+      return;
+    }
+    const words = q.split(/\s+/).filter(Boolean);
     document.querySelectorAll('#entry-tbody tr').forEach(tr => {
-      tr.style.display = tr.dataset.naziv.includes(q) ? '' : 'none';
+      const n = tr.dataset.norm;
+      // Sve reči pretrage moraju da se nađu u nazivu (fuzzy po rečima)
+      const match = words.every(w => n.includes(w));
+      tr.style.display = match ? '' : 'none';
     });
   });
 }
@@ -269,6 +277,7 @@ function renderEntryTable(items) {
     tr.className = 'item-row';
     tr.dataset.idx = i;
     tr.dataset.naziv = item.naziv.toLowerCase();
+    tr.dataset.norm  = norm(item.naziv);
     tr.dataset.knjig = item.stanje ?? '';
     const val = item.stanje ?? '';
     tr.innerHTML = `
@@ -434,6 +443,18 @@ function exportCSV() {
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Normalizacija za pretragu: dijakritici → ascii, višestruki razmaci, lower
+function norm(s) {
+  return String(s).toLowerCase()
+    .replace(/[čć]/g,'c').replace(/š/g,'s').replace(/ž/g,'z')
+    .replace(/đ/g,'d').replace(/[áà]/g,'a').replace(/[éè]/g,'e')
+    // ukloni "lit", "kom" sa kraja (radi matching bez oznake)
+    .replace(/\blit\b/g,'').replace(/\bkom\b/g,'')
+    // ujednači varijante pisanja (ff→f, ck→k, ue→u itd.)
+    .replace(/ff/g,'f').replace(/ck/g,'k').replace(/ph/g,'f')
+    .replace(/\s+/g,' ').trim();
 }
 
 // ── PWA ───────────────────────────────────────────────────
